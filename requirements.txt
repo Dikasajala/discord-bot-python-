@@ -1,0 +1,5 @@
+discord.py>=2.3.0
+yt-dlp
+qrcode[pil]
+requests
+Pillow
