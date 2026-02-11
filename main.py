@@ -5,23 +5,22 @@ import re
 import os
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-SCAN_CHANNEL_ID = 1469740150522380299  # channel khusus scan
+SCAN_CHANNEL_ID = 1469740150522380299  # ganti dengan channel scan kamu
 
 intents = discord.Intents.default()
 intents.message_content = True
-
 client = discord.Client(intents=intents)
 tree = discord.app_commands.CommandTree(client)
 
 # =========================
-# 🔎 SCANNER ENGINE + RISK %
+# 🔎 SCANNER ENGINE
 # =========================
 def scan_content(content):
     content_lower = content.lower()
     risk_score = 0
     detected_patterns = []
 
-    # 🔴 DETEKSI BERAT (keylogger / exfiltration)
+    # 🔴 BERBAHAYA
     dangerous_patterns = [
         r"discord(app)?\.com/api/webhooks",
         r"api\.telegram\.org",
@@ -36,39 +35,34 @@ def scan_content(content):
         r"keylogger"
     ]
 
-    # 🟡 DETEKSI OBFS / MENCURIGAKAN
+    # 🟡 MENCURIGAKAN
     warning_patterns = [
         r"loadstring",
         r"assert\s*\(\s*load",
         r"base64",
         r"string\.char",
-        r"\.\.",            # string concat obfuscation
+        r"\.\.",
         r"while\s+true\s+do"
     ]
 
-    # 🔎 Scan dangerous
     for pattern in dangerous_patterns:
         if re.search(pattern, content_lower):
             risk_score += 35
             detected_patterns.append(pattern)
 
-    # 🔎 Scan warning
     for pattern in warning_patterns:
         if re.search(pattern, content_lower):
             risk_score += 15
             detected_patterns.append(pattern)
 
-    # 📏 Deteksi Base64 panjang (sering sembunyikan webhook)
     base64_strings = re.findall(r"[A-Za-z0-9+/=]{100,}", content)
     if base64_strings:
         risk_score += 25
         detected_patterns.append("Base64 Panjang")
 
-    # Batasi max
     if risk_score > 100:
         risk_score = 100
 
-    # Tentukan status
     if risk_score >= 80:
         status = "BERBAHAYA"
     elif risk_score >= 40:
@@ -82,8 +76,6 @@ def scan_content(content):
 # 🎨 EMBED BUILDER
 # =========================
 def create_embed(filename, size, user, status, risk_score, detected_files=None, patterns=None):
-
-    # Warna otomatis
     if risk_score >= 80:
         color = discord.Color.red()
         icon = "🔴"
@@ -99,127 +91,109 @@ def create_embed(filename, size, user, status, risk_score, detected_files=None, 
         color=color
     )
 
-    # Info ringkas
-    embed.add_field(
-        name="👤 Pengirim",
-        value=user.mention,
-        inline=True
-    )
+    embed.add_field(name="👤 Pengirim", value=user.mention, inline=True)
+    embed.add_field(name="📦 Ukuran File", value=f"{size} KB", inline=True)
 
-    embed.add_field(
-        name="📦 Ukuran File",
-        value=f"{size} KB",
-        inline=True
-    )
+    embed.add_field(name="📊 Status", value=f"{icon} **{status}**", inline=False)
+    embed.add_field(name="📈 Risiko", value=f"**{risk_score}%**", inline=False)
 
-    # Status
-    embed.add_field(
-        name="📊 Status",
-        value=f"{icon} **{status}**",
-        inline=False
-    )
-
-    # Risiko di bawah status
-    embed.add_field(
-        name="📈 Risiko",
-        value=f"**{risk_score}%**",
-        inline=False
-    )
-
-    # File terdeteksi
     if detected_files:
         file_list = "\n".join(f"• `{f}`" for f in detected_files)
-        embed.add_field(
-            name="📂 File Terdeteksi",
-            value=file_list,
-            inline=False
-        )
+        embed.add_field(name="📂 File Terdeteksi", value=file_list, inline=False)
 
-    # Pola terdeteksi
     if patterns:
         pattern_list = "\n".join(f"• `{p}`" for p in patterns)
-        embed.add_field(
-            name="🔎 Pola Terdeteksi",
-            value=pattern_list,
-            inline=False
-        )
+        embed.add_field(name="🔎 Pola Terdeteksi", value=pattern_list, inline=False)
 
     embed.set_footer(text="🔐 Tatang Bot")
-    embed.set_thumbnail(url="https://cdn-icons-png.flaticon.com/512/2910/2910763.png")  # opsional
+    embed.set_thumbnail(url="https://cdn-icons-png.flaticon.com/512/2910/2910763.png")
 
     return embed
 
 # =========================
-# 📂 AUTO SCAN FILE
+# 📂 ON_MESSAGE
 # =========================
 @client.event
 async def on_message(message):
     if message.author.bot:
         return
-
     if message.channel.id != SCAN_CHANNEL_ID:
         return
 
     for attachment in message.attachments:
         filename = attachment.filename.lower()
+        size_kb = round(attachment.size / 1024, 2)
 
-        # Hanya scan file didukung
-        if filename.endswith((".lua", ".luac", ".zip")):
-            file_bytes = await attachment.read()
-            size_kb = round(len(file_bytes) / 1024, 2)
+        if attachment.size > 3 * 1024 * 1024:
+            await message.channel.send(f"⚠️ File `{attachment.filename}` terlalu besar (>3MB).")
+            continue
 
-            final_status = "AMAN"
-            final_risk = 0
-            detected_patterns = []
-            detected_file = None
+        file_bytes = await attachment.read()
+        final_status = "AMAN"
+        final_risk = 0
+        detected_patterns = []
+        detected_files = []
 
-            # 🔹 Scan LUA / LUAC langsung
-            if filename.endswith((".lua", ".luac")):
-                content = file_bytes.decode("utf-8", errors="ignore")
-                status, risk, patterns = scan_content(content)
-                final_status = status
-                final_risk = risk
-                detected_patterns = patterns
-                detected_file = attachment.filename
+        # Scan .lua / .luac
+        if filename.endswith((".lua", ".luac")):
+            try:
+                if filename.endswith(".lua"):
+                    content = file_bytes.decode("utf-8", errors="ignore")
+                else:
+                    content = file_bytes.decode("latin1", errors="ignore")
+            except:
+                content = file_bytes.decode("latin1", errors="ignore")
 
-            # 🔹 Scan ZIP / Library
-            elif filename.endswith(".zip"):
-                try:
-                    zip_file = zipfile.ZipFile(io.BytesIO(file_bytes))
-                    for file in zip_file.namelist():
-                        if file.endswith((".lua", ".luac")):
-                            content = zip_file.read(file).decode("utf-8", errors="ignore")
-                            status, risk, patterns = scan_content(content)
+            status, risk_score, patterns = scan_content(content)
+            final_status = status
+            final_risk = risk_score
+            detected_patterns = patterns
+            detected_files = [attachment.filename]
 
-                            # Update final risk jika lebih tinggi
-                            if risk > final_risk:
-                                final_status = status
-                                final_risk = risk
-                                detected_patterns = patterns
-                                detected_file = file
-                except:
-                    final_status = "MENCURIGAKAN"
-                    final_risk = 50
+        # Scan .zip
+        elif filename.endswith(".zip"):
+            try:
+                zip_file = zipfile.ZipFile(io.BytesIO(file_bytes))
+                for file in zip_file.namelist():
+                    if file.endswith((".lua", ".luac")):
+                        content_bytes = zip_file.read(file)
+                        try:
+                            if file.endswith(".lua"):
+                                content = content_bytes.decode("utf-8", errors="ignore")
+                            else:
+                                content = content_bytes.decode("latin1", errors="ignore")
+                        except:
+                            content = content_bytes.decode("latin1", errors="ignore")
 
-            # Kirim embed hasil scan
-            embed = create_embed(
-                attachment.filename,
-                size_kb,
-                message.author,
-                final_status,
-                final_risk,
-                detected_file=[detected_file] if detected_file else None,
-                patterns=detected_patterns
-            )
+                        status, risk_score, patterns = scan_content(content)
 
-            await message.channel.send(embed=embed)
+                        if risk_score > final_risk:
+                            final_status = status
+                            final_risk = risk_score
+                            detected_patterns = patterns
+                            detected_files = [file]
+            except Exception:
+                final_status = "MENCURIGAKAN"
+                final_risk = 50
+                detected_patterns = ["Error membaca zip"]
+
+        embed = create_embed(
+            filename=attachment.filename,
+            size=size_kb,
+            user=message.author,
+            status=final_status,
+            risk_score=final_risk,
+            detected_files=detected_files if detected_files else None,
+            patterns=detected_patterns
+        )
+
+        await message.channel.send(embed=embed)
 
 # =========================
 # 📋 SLASH MENU
 # =========================
 @tree.command(name="menu", description="Tampilkan menu Tatang Bot")
 async def menu(interaction: discord.Interaction):
-
     embed = discord.Embed(
         title="🛡️ Tatang Bot — Pemindai Keamanan",
         description="🔐 Sistem keamanan otomatis untuk file SA-MP",
@@ -241,7 +215,7 @@ async def menu(interaction: discord.Interaction):
         value=(
             "• `.lua`\n"
             "• `.luac`\n"
-            "• `.zip` (isi lua/luaC otomatis discan)"
+            "• `.zip` (isi lua/luac otomatis discan)"
         ),
         inline=False
     )
@@ -257,16 +231,15 @@ async def menu(interaction: discord.Interaction):
     )
 
     embed.set_footer(text="🔐 Tatang Bot")
-
     await interaction.response.send_message(embed=embed)
 
 # =========================
-# 🔔 READY EVENT
+# 🔔 READY
 # =========================
 @client.event
 async def on_ready():
     await tree.sync()
-    print(f"Bot aktif sebagai {client.user}")
+    print(f"Tatang Bot aktif sebagai {client.user}")
 
 # =========================
 # 🚀 RUN BOT
