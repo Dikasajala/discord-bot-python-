@@ -1,190 +1,248 @@
 import discord
-from discord import app_commands
-from discord.ext import commands
-import base64, random, string, tempfile, os, time, ast
-import yt_dlp
-import qrcode
-import requests
+import zipfile
+import io
+import re
+import os
 
-TOKEN = "ISI_TOKEN_BOT_KAMU"
+TOKEN = os.getenv("DISCORD_TOKEN")
+SCAN_CHANNEL_ID = 1469740150522380299
 
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
 
-start_time = time.time()
+client = discord.Client(intents=intents)
+tree = discord.app_commands.CommandTree(client)
 
-# ======================
-# UTIL
-# ======================
-def rand_var():
-    return ''.join(random.choices(string.ascii_letters, k=8))
+# =========================
+# 🔎 SCANNER ENGINE + RISK %
+# =========================
+def scan_content(content):
+    content_lower = content.lower()
 
-def obfuscate_code(text, level):
-    if level == "low":
-        encoded = base64.b64encode(text.encode()).decode()
-        return f'import base64\nexec(base64.b64decode("{encoded}").decode())'
+    dangerous_patterns = [
+        r"discord\.com/api/webhooks",
+        r"discordapp\.com/api/webhooks",
+        r"api\.telegram\.org",
+        r"t\.me/",
+        r"sendmessage",
+        r"requests\.post",
+        r"http\.request",
+        r"socket\.connect"
+    ]
 
-    elif level == "medium":
-        encoded = base64.b64encode(text.encode()).decode()[::-1]
-        v = rand_var()
-        return f'import base64\n{v}="{encoded}"\nexec(base64.b64decode({v}[::-1]).decode())'
+    warning_patterns = [
+        r"loadstring",
+        r"base64",
+        r"require\s*\(",
+        r"setclipboard"
+    ]
 
-    elif level == "hard":
-        encoded = base64.b64encode(text.encode()).decode()
-        parts = [encoded[i:i+10] for i in range(0, len(encoded), 10)]
-        var = rand_var()
-        joined = " + ".join([f'"{p}"' for p in parts])
-        return f'import base64\n{var} = {joined}\nexec(base64.b64decode({var}).decode())'
+    risk_score = 0
+    detected_patterns = []
 
-# ======================
-# SAFE CALC
-# ======================
-def safe_calc(expr):
-    tree = ast.parse(expr, mode="eval")
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.Expression, ast.BinOp, ast.UnaryOp,
-                                 ast.Num, ast.Add, ast.Sub, ast.Mult,
-                                 ast.Div, ast.Pow, ast.Mod)):
-            raise ValueError("Invalid expression")
-    return eval(compile(tree, "<calc>", "eval"))
+    # 🔴 Dangerous
+    for pattern in dangerous_patterns:
+        if re.search(pattern, content_lower):
+            risk_score += 40
+            detected_patterns.append(pattern)
 
-# ======================
-# OBF VIEW
-# ======================
-class ObfView(discord.ui.View):
-    def __init__(self, file):
-        super().__init__(timeout=60)
-        self.file = file
+    # 🟡 Mencurigakan
+    for pattern in warning_patterns:
+        if re.search(pattern, content_lower):
+            risk_score += 15
+            detected_patterns.append(pattern)
 
-    async def process(self, interaction, level):
-        data = await self.file.read()
-        text = data.decode("utf-8", errors="ignore")
-        result = obfuscate_code(text, level)
+    if risk_score > 100:
+        risk_score = 100
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".py") as tmp:
-            tmp.write(result.encode())
-            filename = tmp.name
-
-        await interaction.response.send_message(
-            content=f"✅ **Obfuscation {level.upper()} berhasil!**",
-            file=discord.File(filename, f"obf_{level}.py"),
-            ephemeral=True
-        )
-        os.unlink(filename)
-
-    @discord.ui.button(label="🟢 LOW", style=discord.ButtonStyle.success)
-    async def low(self, interaction: discord.Interaction, _):
-        await self.process(interaction, "low")
-
-    @discord.ui.button(label="🟡 MEDIUM", style=discord.ButtonStyle.primary)
-    async def medium(self, interaction: discord.Interaction, _):
-        await self.process(interaction, "medium")
-
-    @discord.ui.button(label="🔴 HARD", style=discord.ButtonStyle.danger)
-    async def hard(self, interaction: discord.Interaction, _):
-        await self.process(interaction, "hard")
-
-# ======================
-# MENU
-# ======================
-@bot.tree.command(name="menu")
-async def menu(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="📌 BOT MENU",
-        description="🤖 Bot AI + Tools + Downloader + Obfuscation",
-        color=0x00ffcc
-    )
-    embed.add_field(name="🛡️ Security", value="🔐 `/obf`", inline=False)
-    embed.add_field(name="📥 Download", value="🎥 `/youtube`", inline=False)
-    embed.add_field(name="🧰 Tools", value="/ping /uptime /calc /qr /poll", inline=False)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-# ======================
-# COMMANDS
-# ======================
-@bot.tree.command(name="obf")
-@app_commands.describe(file="Upload script")
-async def obf(interaction: discord.Interaction, file: discord.Attachment):
-    embed = discord.Embed(
-        title="🛡️ OBFUSCATION",
-        description="Pilih level obfuscation",
-        color=0x2ecc71
-    )
-    await interaction.response.send_message(embed=embed, view=ObfView(file), ephemeral=True)
-
-@bot.tree.command(name="ping")
-async def ping(interaction: discord.Interaction):
-    await interaction.response.send_message("🏓 Pong!")
-
-@bot.tree.command(name="uptime")
-async def uptime(interaction: discord.Interaction):
-    seconds = int(time.time() - start_time)
-    await interaction.response.send_message(f"⏰ Uptime: {seconds}s")
-
-@bot.tree.command(name="calc")
-async def calc(interaction: discord.Interaction, expr: str):
-    try:
-        result = safe_calc(expr)
-        await interaction.response.send_message(f"🧮 Hasil: {result}")
-    except:
-        await interaction.response.send_message("❌ Ekspresi tidak valid")
-
-@bot.tree.command(name="qr")
-async def qr_cmd(interaction: discord.Interaction, text: str):
-    filename = f"qr_{interaction.user.id}.png"
-    img = qrcode.make(text)
-    img.save(filename)
-    await interaction.response.send_message(file=discord.File(filename))
-    os.unlink(filename)
-
-@bot.tree.command(name="poll")
-async def poll(interaction: discord.Interaction, question: str):
-    await interaction.response.send_message(f"📊 **Poll:** {question}")
-    msg = await interaction.original_response()
-    await msg.add_reaction("👍")
-    await msg.add_reaction("👎")
-
-# ======================
-# YOUTUBE
-# ======================
-@bot.tree.command(name="youtube")
-async def youtube(interaction: discord.Interaction, url: str):
-    await interaction.response.defer()
-
-    ydl_opts = {
-        "format": "mp4",
-        "outtmpl": "%(title)s.%(ext)s",
-        "quiet": True
-    }
-
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url)
-        filename = ydl.prepare_filename(info)
-
-    if os.path.getsize(filename) > 25 * 1024 * 1024:
-        os.unlink(filename)
-        return await interaction.followup.send("❌ File terlalu besar untuk Discord")
-
-    await interaction.followup.send(file=discord.File(filename))
-    os.unlink(filename)
-
-# ======================
-# ERROR HANDLER
-# ======================
-@bot.tree.error
-async def on_error(interaction, error):
-    if interaction.response.is_done():
-        await interaction.followup.send("❌ Terjadi error", ephemeral=True)
+    if risk_score >= 80:
+        status = "BERBAHAYA"
+    elif risk_score >= 40:
+        status = "MENCURIGAKAN"
     else:
-        await interaction.response.send_message("❌ Terjadi error", ephemeral=True)
+        status = "AMAN"
 
-# ======================
-# READY
-# ======================
-@bot.event
+    return status, risk_score, detected_patterns
+
+
+# =========================
+# 🎨 EMBED BUILDER
+# =========================
+def create_embed(filename, size, user, status, risk_score, detected_file=None, patterns=None):
+
+    # Warna berdasarkan persen
+    if risk_score >= 80:
+        color = discord.Color.red()
+        icon = "🔴"
+    elif risk_score >= 40:
+        color = discord.Color.orange()
+        icon = "🟡"
+    else:
+        color = discord.Color.green()
+        icon = "🟢"
+
+    embed = discord.Embed(
+        title="🛡️ Tatang Bot — SA-MP Security Scanner",
+        color=color
+    )
+
+    embed.add_field(
+        name="📦 Informasi File",
+        value=f"• **Nama:** `{filename}`\n• **Ukuran:** `{size} KB`",
+        inline=False
+    )
+
+    embed.add_field(
+        name="👤 Pengirim",
+        value=user.mention,
+        inline=False
+    )
+
+    embed.add_field(
+        name="📊 Status Scan",
+        value=f"{icon} **{status}**",
+        inline=False
+    )
+
+    embed.add_field(
+        name="📈 Tingkat Risiko",
+        value=f"**{risk_score}%**",
+        inline=False
+    )
+
+    if detected_file:
+        embed.add_field(
+            name="📂 File Terdeteksi",
+            value=f"`{detected_file}`",
+            inline=False
+        )
+
+    if patterns:
+        embed.add_field(
+            name="🔎 Pola Terdeteksi",
+            value=f"`{', '.join(patterns)}`",
+            inline=False
+        )
+
+    embed.set_footer(text="🔐 Tatang Security System")
+
+    return embed
+
+
+# =========================
+# 📂 AUTO SCAN FILE
+# =========================
+@client.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    if message.channel.id != SCAN_CHANNEL_ID:
+        return
+
+    for attachment in message.attachments:
+        filename = attachment.filename.lower()
+
+        if filename.endswith((".lua", ".luac", ".zip")):
+            file_bytes = await attachment.read()
+            size_kb = round(len(file_bytes) / 1024, 2)
+
+            final_status = "AMAN"
+            final_risk = 0
+            detected_patterns = []
+            detected_file = None
+
+            # 🔹 LUA / LUAC
+            if filename.endswith((".lua", ".luac")):
+                content = file_bytes.decode("utf-8", errors="ignore")
+                status, risk, patterns = scan_content(content)
+                final_status = status
+                final_risk = risk
+                detected_patterns = patterns
+                detected_file = attachment.filename
+
+            # 🔹 ZIP
+            elif filename.endswith(".zip"):
+                try:
+                    zip_file = zipfile.ZipFile(io.BytesIO(file_bytes))
+                    for file in zip_file.namelist():
+                        if file.endswith((".lua", ".luac")):
+                            content = zip_file.read(file).decode("utf-8", errors="ignore")
+                            status, risk, patterns = scan_content(content)
+
+                            if risk > final_risk:
+                                final_status = status
+                                final_risk = risk
+                                detected_patterns = patterns
+                                detected_file = file
+                except:
+                    final_status = "MENCURIGAKAN"
+                    final_risk = 50
+
+            embed = create_embed(
+                attachment.filename,
+                size_kb,
+                message.author,
+                final_status,
+                final_risk,
+                detected_file,
+                detected_patterns
+            )
+
+            await message.channel.send(embed=embed)
+
+
+# =========================
+# 📋 SLASH MENU
+# =========================
+@tree.command(name="menu", description="Tampilkan menu Tatang Scanner")
+async def menu(interaction: discord.Interaction):
+
+    embed = discord.Embed(
+        title="🛡️ Tatang Bot — Security Scanner",
+        description="🔐 Sistem keamanan otomatis untuk file SA-MP",
+        color=discord.Color.blurple()
+    )
+
+    embed.add_field(
+        name="📂 Cara Menggunakan",
+        value=(
+            "1️⃣ Upload file di channel scan\n"
+            "2️⃣ Bot akan otomatis memeriksa\n"
+            "3️⃣ Hasil scan muncul dalam beberapa detik"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="📁 Format Didukung",
+        value=(
+            "• `.lua`\n"
+            "• `.luac`\n"
+            "• `.zip` (isi lua otomatis discan)"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="📊 Sistem Status",
+        value=(
+            "🟢 **AMAN** → File bersih\n"
+            "🟡 **MENCURIGAKAN** → Ditemukan kode yang perlu diperiksa\n"
+            "🔴 **BERBAHAYA** → Terdeteksi webhook / Telegram"
+        ),
+        inline=False
+    )
+
+    embed.set_footer(text="🔐 Tatang Security System")
+
+    await interaction.response.send_message(embed=embed)
+
+
+@client.event
 async def on_ready():
-    await bot.tree.sync()
-    print("Bot Ready!")
+    await tree.sync()
+    print(f"Bot aktif sebagai {client.user}")
 
-bot.run(TOKEN)
+
+client.run(TOKEN)
