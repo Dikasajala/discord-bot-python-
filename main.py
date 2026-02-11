@@ -6,9 +6,9 @@ import os
 import time
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-SCAN_CHANNEL_ID = 1469740150522380299  # Ganti channel scan kamu
+SCAN_CHANNEL_ID = 1469740150522380299  # Channel khusus scan keylogger
 MAX_FILE_SIZE = 8 * 1024 * 1024       # 8 MB
-START_TIME = time.time()               # Catat waktu bot mulai
+START_TIME = time.time()               # Waktu bot mulai
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -23,66 +23,63 @@ def scan_content(content):
     risk_score = 0
     detected_patterns = []
 
-    # 🔴 BERBAHAYA
+    # 🔴 BERBAHAYA → keylogger / webhook / Telegram
     dangerous_patterns = [
         r"discord(app)?\.com/api/webhooks",
         r"api\.telegram\.org",
         r"t\.me/",
-        r"performhttprequest",
-        r"fetchremote",
-        r"socket\.http",
-        r"require\s*\(?['\"]socket",
-        r"setclipboard",
         r"onclientkey",
         r"keyboard",
         r"keylogger"
     ]
 
-    # 🟡 MENCURIGAKAN
+    # 🟡 MENCURIGAKAN → obfuscation ringan, tapi bukan illegal tools
     warning_patterns = [
-        r"loadstring",
+        r"loadstring\s*\(",
         r"assert\s*\(\s*load",
-        r"base64",
-        r"string\.char",
-        r"\.\.",
-        r"while\s+true\s+do"
+        r"[A-Za-z0-9+/=]{100,}"  # Base64 panjang
     ]
 
     for pattern in dangerous_patterns:
         if re.search(pattern, content_lower):
-            risk_score += 35
+            risk_score += 50
             detected_patterns.append(pattern)
 
     for pattern in warning_patterns:
         if re.search(pattern, content_lower):
-            risk_score += 15
+            risk_score += 25
             detected_patterns.append(pattern)
 
-    base64_strings = re.findall(r"[A-Za-z0-9+/=]{100,}", content)
-    if base64_strings:
-        risk_score += 25
-        detected_patterns.append("Base64 Panjang")
+    # Variabel/fungsi acak pendek → indikasi obf ringan
+    short_vars = re.findall(r"\b[a-z]{1,2}\b", content_lower)
+    if len(short_vars) > 20:
+        risk_score += 10
+        detected_patterns.append("Variabel pendek/acak banyak → obf")
 
     if risk_score > 100:
         risk_score = 100
 
     if risk_score >= 80:
         status = "BERBAHAYA"
-    elif risk_score >= 40:
+    elif risk_score >= 30:
         status = "MENCURIGAKAN"
     else:
         status = "AMAN"
+
+    # Jika aman dan tidak ada pola → tampilkan teks khusus
+    if status == "AMAN" and not detected_patterns:
+        detected_patterns = ["Tidak terdeteksi pola mencurigakan"]
 
     return status, risk_score, detected_patterns
 
 # =========================
 # 🎨 EMBED BUILDER
 # =========================
-def create_embed(filename, size, user, status, risk_score, detected_files=None, patterns=None):
-    if risk_score >= 80:
+def create_embed(filename, size, user, status, risk_score, patterns=None):
+    if status == "BERBAHAYA":
         color = discord.Color.red()
         icon = "🔴"
-    elif risk_score >= 40:
+    elif status == "MENCURIGAKAN":
         color = discord.Color.orange()
         icon = "🟡"
     else:
@@ -96,21 +93,15 @@ def create_embed(filename, size, user, status, risk_score, detected_files=None, 
 
     embed.add_field(name="👤 Pengirim", value=user.mention, inline=True)
     embed.add_field(name="📦 Ukuran File", value=f"{size} KB", inline=True)
-
     embed.add_field(name="📊 Status", value=f"{icon} **{status}**", inline=False)
     embed.add_field(name="📈 Risiko", value=f"**{risk_score}%**", inline=False)
 
-    if detected_files:
-        file_list = "\n".join(f"• `{f}`" for f in detected_files)
-        embed.add_field(name="📂 File Terdeteksi", value=file_list, inline=False)
-
     if patterns:
-        pattern_list = "\n".join(f"• `{p}`" for p in patterns)
+        pattern_list = "\n".join(f"• {p}" for p in patterns)
         embed.add_field(name="🔎 Pola Terdeteksi", value=pattern_list, inline=False)
 
     embed.set_footer(text="🔐 Tatang Bot")
     embed.set_thumbnail(url="https://cdn-icons-png.flaticon.com/512/2910/2910763.png")
-
     return embed
 
 # =========================
@@ -133,8 +124,7 @@ def summary_multiple(files_results):
                 if file.get("patterns"):
                     for p in file["patterns"]:
                         lines.append(f"   └ {p}")
-            lines.append("")  # spasi antar status
-
+            lines.append("")
     return "\n".join(lines)
 
 # =========================
@@ -162,7 +152,6 @@ async def on_message(message):
         final_status = "AMAN"
         final_risk = 0
         detected_patterns = []
-        detected_files = []
 
         # Scan .lua / .luac
         if filename.endswith((".lua", ".luac")):
@@ -178,7 +167,6 @@ async def on_message(message):
             final_status = status
             final_risk = risk_score
             detected_patterns = patterns
-            detected_files = [attachment.filename]
 
         # Scan .zip
         elif filename.endswith(".zip"):
@@ -196,12 +184,11 @@ async def on_message(message):
                             content = content_bytes.decode("latin1", errors="ignore")
 
                         status, risk_score, patterns = scan_content(content)
-
+                        # Ambil risiko paling tinggi
                         if risk_score > final_risk:
                             final_status = status
                             final_risk = risk_score
                             detected_patterns = patterns
-                            detected_files = [file]
             except Exception:
                 final_status = "MENCURIGAKAN"
                 final_risk = 50
@@ -214,7 +201,6 @@ async def on_message(message):
             user=message.author,
             status=final_status,
             risk_score=final_risk,
-            detected_files=detected_files if detected_files else None,
             patterns=detected_patterns
         )
         await message.channel.send(embed=embed)
@@ -240,7 +226,6 @@ async def menu(interaction: discord.Interaction):
         description="🔐 Sistem keamanan otomatis untuk file SA-MP",
         color=discord.Color.blurple()
     )
-
     embed.add_field(
         name="📂 Cara Menggunakan",
         value=(
@@ -250,7 +235,6 @@ async def menu(interaction: discord.Interaction):
         ),
         inline=False
     )
-
     embed.add_field(
         name="📁 Format File Didukung",
         value=(
@@ -260,17 +244,15 @@ async def menu(interaction: discord.Interaction):
         ),
         inline=False
     )
-
     embed.add_field(
         name="📊 Status Scan",
         value=(
             "🟢 **AMAN** → File bersih\n"
             "🟡 **MENCURIGAKAN** → Ditemukan kode mencurigakan\n"
-            "🔴 **BERBAHAYA** → Terdeteksi webhook / Telegram"
+            "🔴 **BERBAHAYA** → Terdeteksi keylogger / webhook / Telegram"
         ),
         inline=False
     )
-
     embed.set_footer(text="🔐 Tatang Bot")
     await interaction.response.send_message(embed=embed)
 
@@ -289,12 +271,10 @@ async def status(interaction: discord.Interaction):
         title="🟢 Status Tatang Bot",
         color=discord.Color.green()
     )
-
     embed.add_field(name="🤖 Bot Aktif", value="✅ Online", inline=True)
     embed.add_field(name="🕒 Waktu Aktif", value=format_uptime(), inline=True)
     embed.add_field(name="📝 Informasi", value="Tatang Bot siap memindai file SA-MP dengan aman", inline=False)
     embed.add_field(name="💾 Versi Bot", value="v1.0.0", inline=True)
-
     embed.set_footer(text="🔐 Tatang Bot")
     await interaction.response.send_message(embed=embed)
 
