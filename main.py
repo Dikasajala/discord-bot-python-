@@ -3,9 +3,12 @@ import zipfile
 import io
 import re
 import os
+import time
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-SCAN_CHANNEL_ID = 1469740150522380299  # ganti dengan channel scan kamu
+SCAN_CHANNEL_ID = 1469740150522380299  # Ganti channel scan kamu
+MAX_FILE_SIZE = 8 * 1024 * 1024       # 8 MB
+START_TIME = time.time()               # Catat waktu bot mulai
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -111,6 +114,30 @@ def create_embed(filename, size, user, status, risk_score, detected_files=None, 
     return embed
 
 # =========================
+# 📝 RINGKASAN MULTI FILE
+# =========================
+def summary_multiple(files_results):
+    grouped = {"AMAN": [], "MENCURIGAKAN": [], "BERBAHAYA": []}
+
+    for f in files_results:
+        grouped[f["status"]].append(f)
+
+    lines = []
+
+    for status in ["AMAN", "MENCURIGAKAN", "BERBAHAYA"]:
+        if grouped[status]:
+            icon = "🟢" if status=="AMAN" else "🟡" if status=="MENCURIGAKAN" else "🔴"
+            lines.append(f"{icon} {status}")
+            for idx, file in enumerate(grouped[status], 1):
+                lines.append(f"{idx}. {file['filename']}")
+                if file.get("patterns"):
+                    for p in file["patterns"]:
+                        lines.append(f"   └ {p}")
+            lines.append("")  # spasi antar status
+
+    return "\n".join(lines)
+
+# =========================
 # 📂 ON_MESSAGE
 # =========================
 @client.event
@@ -120,12 +147,15 @@ async def on_message(message):
     if message.channel.id != SCAN_CHANNEL_ID:
         return
 
+    files_results = []
+
     for attachment in message.attachments:
         filename = attachment.filename.lower()
         size_kb = round(attachment.size / 1024, 2)
 
-        if attachment.size > 3 * 1024 * 1024:
-            await message.channel.send(f"⚠️ File `{attachment.filename}` terlalu besar (>3MB).")
+        # Batasi file ≤8MB
+        if attachment.size > MAX_FILE_SIZE:
+            await message.channel.send(f"⚠️ File `{attachment.filename}` terlalu besar (>8MB).")
             continue
 
         file_bytes = await attachment.read()
@@ -177,6 +207,7 @@ async def on_message(message):
                 final_risk = 50
                 detected_patterns = ["Error membaca zip"]
 
+        # Embed per file
         embed = create_embed(
             filename=attachment.filename,
             size=size_kb,
@@ -186,8 +217,18 @@ async def on_message(message):
             detected_files=detected_files if detected_files else None,
             patterns=detected_patterns
         )
-
         await message.channel.send(embed=embed)
+
+        files_results.append({
+            "filename": attachment.filename,
+            "status": final_status,
+            "patterns": detected_patterns
+        })
+
+    # Kirim summary multi file
+    if files_results:
+        summary_text = summary_multiple(files_results)
+        await message.channel.send(f"📄 **Ringkasan Scan**\n```\n{summary_text}\n```")
 
 # =========================
 # 📋 SLASH MENU
@@ -205,7 +246,7 @@ async def menu(interaction: discord.Interaction):
         value=(
             "1️⃣ Upload file di channel scan khusus\n"
             "2️⃣ Bot akan otomatis memeriksa file\n"
-            "3️⃣ Hasil scan akan muncul beberapa detik kemudian"
+            "3️⃣ Hasil scan dan ringkasan akan muncul beberapa detik kemudian"
         ),
         inline=False
     )
@@ -229,6 +270,30 @@ async def menu(interaction: discord.Interaction):
         ),
         inline=False
     )
+
+    embed.set_footer(text="🔐 Tatang Bot")
+    await interaction.response.send_message(embed=embed)
+
+# =========================
+# ⚡ STATUS BOT
+# =========================
+def format_uptime():
+    delta = int(time.time() - START_TIME)
+    hours, remainder = divmod(delta, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours}j {minutes}m {seconds}s"
+
+@tree.command(name="status", description="Cek status Tatang Bot")
+async def status(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🟢 Status Tatang Bot",
+        color=discord.Color.green()
+    )
+
+    embed.add_field(name="🤖 Bot Aktif", value="✅ Online", inline=True)
+    embed.add_field(name="🕒 Waktu Aktif", value=format_uptime(), inline=True)
+    embed.add_field(name="📝 Informasi", value="Tatang Bot siap memindai file SA-MP dengan aman", inline=False)
+    embed.add_field(name="💾 Versi Bot", value="v1.0.0", inline=True)
 
     embed.set_footer(text="🔐 Tatang Bot")
     await interaction.response.send_message(embed=embed)
