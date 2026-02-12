@@ -2,6 +2,7 @@ import discord
 import os
 import zipfile
 import re
+import py7zr
 from discord.ext import commands
 
 # ================= CONFIG =================
@@ -9,6 +10,8 @@ from discord.ext import commands
 TOKEN = os.getenv("TOKEN")
 CHANNEL_ID = 1469740150522380299
 MAX_SIZE = 8 * 1024 * 1024  # 8MB
+
+ALLOWED_EXT = (".lua", ".luac", ".zip", ".txt", ".7z")
 
 # ================= SCANNER ENGINE =================
 
@@ -47,13 +50,34 @@ def scan_zip(path):
     results = []
     score = 0
 
-    with zipfile.ZipFile(path, 'r') as z:
-        for name in z.namelist():
-            if name.endswith((".lua", ".luac")):
-                data = z.read(name).decode(errors="ignore")
-                found, s = scan_content(data)
-                results.extend(found)
-                score += s
+    try:
+        with zipfile.ZipFile(path, 'r') as z:
+            for name in z.namelist():
+                if name.endswith((".lua", ".luac", ".txt")):
+                    data = z.read(name).decode(errors="ignore")
+                    found, s = scan_content(data)
+                    results.extend(found)
+                    score += s
+    except:
+        pass
+
+    return results, score
+
+
+def scan_7z(path):
+    results = []
+    score = 0
+
+    try:
+        with py7zr.SevenZipFile(path, mode='r') as z:
+            for name, bio in z.readall().items():
+                if name.endswith((".lua", ".luac", ".txt")):
+                    data = bio.read().decode(errors="ignore")
+                    found, s = scan_content(data)
+                    results.extend(found)
+                    score += s
+    except:
+        pass
 
     return results, score
 
@@ -62,6 +86,14 @@ def scan_file(path):
 
     if path.endswith(".zip"):
         return scan_zip(path)
+
+    if path.endswith(".7z"):
+        return scan_7z(path)
+
+    if path.endswith(".txt"):
+        with open(path, "r", errors="ignore") as f:
+            content = f.read()
+        return scan_content(content)
 
     with open(path, "rb") as f:
         content = f.read().decode(errors="ignore")
@@ -128,7 +160,7 @@ async def menu(interaction: discord.Interaction):
 
     embed.add_field(
         name="📤 Cara Pakai",
-        value=f"Upload file `.lua`, `.luac`, `.zip` di <#{CHANNEL_ID}>",
+        value=f"Upload file `.lua`, `.luac`, `.zip`, `.txt`, `.7z` di <#{CHANNEL_ID}>",
         inline=False
     )
 
@@ -187,7 +219,25 @@ async def on_message(message):
 
             filename = attachment.filename.lower()
 
-            if not filename.endswith((".lua", ".luac", ".zip")):
+            # ===== FILE TYPE CHECK =====
+            if not filename.endswith(ALLOWED_EXT):
+
+                embed = discord.Embed(
+                    title="🚫 Format File Tidak Didukung",
+                    description="File yang dikirim tidak termasuk format yang bisa discan.",
+                    color=0xe74c3c
+                )
+
+                embed.add_field(name="📁 File Diterima", value=attachment.filename, inline=False)
+                embed.add_field(
+                    name="✅ Format yang Didukung",
+                    value="`.lua` `.luac` `.zip` `.txt` `.7z`",
+                    inline=False
+                )
+
+                embed.set_footer(text="Silakan kirim file sesuai format 🔍")
+
+                await message.channel.send(embed=embed)
                 return
 
             temp = f"temp_{filename}"
@@ -210,11 +260,7 @@ async def on_message(message):
             else:
                 text = "✅ Tidak ditemukan pola mencurigakan"
 
-            embed.add_field(
-                name="🧬 Pola Terdeteksi",
-                value=text,
-                inline=False
-            )
+            embed.add_field(name="🧬 Pola Terdeteksi", value=text, inline=False)
 
             embed.set_thumbnail(url=message.author.display_avatar.url)
             embed.set_footer(text=f"Diminta oleh {message.author}")
