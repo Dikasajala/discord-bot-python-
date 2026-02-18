@@ -1,39 +1,27 @@
 import discord
 import os
-import json
 import psutil
 import zipfile
 import py7zr
 import re
 import io
-import math
 from discord.ext import commands
 from discord import app_commands
 
 # ================= KONFIGURASI ID =================
 TOKEN = os.getenv("TOKEN")
+
 SCAN_CHANNEL_ID = 1469740150522380299      
 REQ_VIP_CHANNEL_ID = 1472535677634740398   
-ADMIN_ROLE_ID = 1471265207945924619        
-VIP_FILE = "vips.json"
 
-# ================= UTILITY FUNCTIONS =================
-def load_vips():
-    if not os.path.exists(VIP_FILE):
-        with open(VIP_FILE, "w") as f: json.dump([], f)
-    try:
-        with open(VIP_FILE, "r") as f: return json.load(f)
-    except: return []
-
-def save_vips(vips):
-    with open(VIP_FILE, "w") as f: json.dump(vips, f)
+ADMIN_ROLE_ID = 1471265207945924619        # ROLE ADMIN
+VIP_ROLE_ID = 1471921766283608195          # ROLE VIP (akses scanner)
 
 # ================= SCANNER ENGINE =================
 def analyze_content(content):
     pola_terdeteksi = []
     found_links = []
     
-    # Regex Webhook & Telegram
     dw_regex = r"https://discord\.com/api/webhooks/\d+/\S+"
     tg_regex = r"https://api\.telegram\.org/bot\d+:\S+"
     
@@ -64,7 +52,7 @@ class TatangBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
-        intents.members = True 
+        intents.members = True
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
@@ -72,11 +60,10 @@ class TatangBot(commands.Bot):
 
 bot = TatangBot()
 
-# ================= SEMUA SLASH COMMANDS (LENGKAP) =================
+# ================= SLASH COMMANDS =================
 
 @bot.tree.command(name="menu", description="Dashboard Utama Tatang Bot")
 async def menu(interaction: discord.Interaction):
-    # Match Dashboard v2.1
     embed = discord.Embed(title="📄 TATANG BOT | DASHBOARD MENU", color=0x3498db)
     embed.description = "Pusat kendali fitur keamanan dan manajemen VIP server."
     
@@ -94,7 +81,7 @@ async def menu(interaction: discord.Interaction):
     
     embed.add_field(
         name="🛡️ **SECURITY STATUS**",
-        value=f"**Scanner:** Aktif ✅\n**Channel:** <#1469740150522380299>\n**Format:** .lua, .zip, .7z",
+        value=f"**Scanner:** Aktif ✅\n**Channel:** <#{SCAN_CHANNEL_ID}>\n**Format:** .lua, .zip, .7z",
         inline=False
     )
 
@@ -103,7 +90,6 @@ async def menu(interaction: discord.Interaction):
 
 @bot.tree.command(name="help", description="Panduan Cara Kerja Scanner")
 async def help_cmd(interaction: discord.Interaction):
-    # Match Help Style
     embed = discord.Embed(title="❓ CARA KERJA DEEP SCANNER", color=0x9b59b6)
     embed.add_field(name="1. Upload File", value="Kirim file `.lua`, `.zip`, atau `.7z` di channel scan.", inline=False)
     embed.add_field(name="2. Analisis Pola", value="Bot membongkar isi file dan mencari baris kode berbahaya (Stealer/Logger).", inline=False)
@@ -112,41 +98,47 @@ async def help_cmd(interaction: discord.Interaction):
 
 @bot.tree.command(name="addvip", description="Berikan akses VIP kepada user")
 async def addvip(interaction: discord.Interaction, member: discord.Member):
-    role = interaction.guild.get_role(ADMIN_ROLE_ID)
-    if role not in interaction.user.roles:
+    admin_role = interaction.guild.get_role(ADMIN_ROLE_ID)
+    if admin_role not in interaction.user.roles:
         return await interaction.response.send_message("❌ **Akses Ditolak!**", ephemeral=True)
-    
-    vips = load_vips()
-    if member.id not in vips:
-        vips.append(member.id)
-        save_vips(vips)
-        # Match VIP Granted Style
-        embed = discord.Embed(title="✨ VIP ACCESS GRANTED", description=f"{member.mention} Berhasil menjadi VIP! ✅", color=0x2ecc71)
-        await interaction.response.send_message(embed=embed)
-    else:
-        await interaction.response.send_message("User sudah VIP.", ephemeral=True)
+
+    vip_role = interaction.guild.get_role(VIP_ROLE_ID)
+
+    if vip_role in member.roles:
+        return await interaction.response.send_message("User sudah VIP.", ephemeral=True)
+
+    await member.add_roles(vip_role)
+
+    embed = discord.Embed(
+        title="✨ VIP ACCESS GRANTED",
+        description=f"{member.mention} Berhasil menjadi VIP! ✅",
+        color=0x2ecc71
+    )
+    await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="removevip", description="Cabut akses VIP user")
 async def removevip(interaction: discord.Interaction, member: discord.Member):
-    role = interaction.guild.get_role(ADMIN_ROLE_ID)
-    if role not in interaction.user.roles:
+    admin_role = interaction.guild.get_role(ADMIN_ROLE_ID)
+    if admin_role not in interaction.user.roles:
         return await interaction.response.send_message("❌ **Akses Ditolak!**", ephemeral=True)
-    
-    vips = load_vips()
-    if member.id in vips:
-        vips.remove(member.id)
-        save_vips(vips)
-        await interaction.response.send_message(f"✅ Akses VIP {member.mention} telah dicabut.")
-    else:
-        await interaction.response.send_message("User bukan anggota VIP.", ephemeral=True)
+
+    vip_role = interaction.guild.get_role(VIP_ROLE_ID)
+
+    if vip_role not in member.roles:
+        return await interaction.response.send_message("User bukan anggota VIP.", ephemeral=True)
+
+    await member.remove_roles(vip_role)
+    await interaction.response.send_message(f"✅ Akses VIP {member.mention} telah dicabut.")
 
 @bot.tree.command(name="listvip", description="Lihat daftar database member VIP")
 async def listvip(interaction: discord.Interaction):
-    vips = load_vips()
-    if not vips:
+    vip_role = interaction.guild.get_role(VIP_ROLE_ID)
+    members = vip_role.members
+
+    if not members:
         return await interaction.response.send_message("Database VIP masih kosong.")
-    
-    mentions = "\n".join([f"• <@{uid}>" for uid in vips])
+
+    mentions = "\n".join([f"• {m.mention}" for m in members])
     embed = discord.Embed(title="👑 DATABASE USER VIP", description=mentions, color=0xf1c40f)
     await interaction.response.send_message(embed=embed)
 
@@ -154,27 +146,30 @@ async def listvip(interaction: discord.Interaction):
 async def status(interaction: discord.Interaction):
     ram = psutil.virtual_memory().percent
     ping = round(bot.latency * 1000)
+
     embed = discord.Embed(title="🚀 SYSTEM STATUS", color=0x2ecc71)
     embed.add_field(name="RAM Usage", value=f"{ram}%", inline=True)
     embed.add_field(name="Bot Latency", value=f"{ping}ms", inline=True)
     await interaction.response.send_message(embed=embed)
 
-# ================= SCANNER LOGIC (VIP ONLY) =================
+# ================= SCANNER LOGIC (ROLE VIP ONLY) =================
 @bot.event
 async def on_message(message):
-    if message.author.bot or message.channel.id != SCAN_CHANNEL_ID: return
+    if message.author.bot or message.channel.id != SCAN_CHANNEL_ID:
+        return
 
     if message.attachments:
-        vips = load_vips()
-        if message.author.id not in vips:
-            # Match Required Style
+        vip_role = message.guild.get_role(VIP_ROLE_ID)
+
+        if vip_role not in message.author.roles:
             embed = discord.Embed(title="🔒 PREMIUM ACCESS REQUIRED", color=0xf1c40f)
             embed.description = f"Halo {message.author.mention}, fitur **Deep Scanner** hanya untuk VIP.\n\n🛡️ **Minta Akses:** <#{REQ_VIP_CHANNEL_ID}>"
             return await message.reply(embed=embed)
 
         for attachment in message.attachments:
             ext = os.path.splitext(attachment.filename)[1].lower()
-            if ext not in [".lua", ".txt", ".zip", ".7z"]: continue
+            if ext not in [".lua", ".txt", ".zip", ".7z"]:
+                continue
 
             await message.add_reaction("⏳")
             file_data = await attachment.read()
@@ -185,36 +180,41 @@ async def on_message(message):
                     content = file_data.decode(errors="ignore")
                     p, l = analyze_content(content)
                     pola.extend(p); links.extend(l); files_count = 1
+
                 elif ext == ".zip":
                     with zipfile.ZipFile(io.BytesIO(file_data)) as z:
                         for f in z.namelist():
                             if f.lower().endswith((".lua", ".txt")):
                                 c = z.read(f).decode(errors="ignore")
-                                p, l = analyze_content(c); pola.extend(p); links.extend(l); files_count += 1
+                                p, l = analyze_content(c)
+                                pola.extend(p); links.extend(l); files_count += 1
+
                 elif ext == ".7z":
-                    # FIX: Menghindari error 'readall'
                     with py7zr.SevenZipFile(io.BytesIO(file_data), mode='r') as z:
                         names = [n for n in z.getnames() if n.lower().endswith((".lua", ".txt"))]
                         if names:
                             contents = z.read(names)
                             for name, bio in contents.items():
                                 c = bio.read().decode(errors="ignore")
-                                p, l = analyze_content(c); pola.extend(p); links.extend(l); files_count += 1
-            except Exception as e: 
+                                p, l = analyze_content(c)
+                                pola.extend(p); links.extend(l); files_count += 1
+
+            except Exception as e:
                 await message.remove_reaction("⏳", bot.user)
                 return await message.reply(f"❌ **Read Error:** `{e}`")
 
-            # Match Scan Result Style
-            pola, links = list(set(pola)), list(set(links))
+            pola = list(set(pola))
+            links = list(set(links))
+
             if links:
                 status, color, conf = "🔴 🚨 BAHAYA TINGGI", 0xff0000, "75%"
                 analisis_msg = f"Ditemukan {len(links)} link webhook berbahaya."
             elif len(pola) >= 2:
                 status, color, conf = "🟠 ⚠️ SANGAT MENCURIGAKAN", 0xe67e22, "75%"
-                analisis_msg = f"Ditemukan {len(pola)} pola mencurigakan. Pola paling berbahaya memiliki level 3."
+                analisis_msg = f"Ditemukan {len(pola)} pola mencurigakan."
             elif len(pola) == 1:
                 status, color, conf = "🟡 🤔 MENCURIGAKAN", 0xf1c40f, "75%"
-                analisis_msg = "Ditemukan 1 pola mencurigakan. Pola paling berbahaya memiliki level 2."
+                analisis_msg = "Ditemukan 1 pola mencurigakan."
             else:
                 status, color, conf = "✅ 🛡️ AMAN", 0x2ecc71, "85%"
                 analisis_msg = "Analisis manual tidak menemukan pola berbahaya."
@@ -229,9 +229,9 @@ async def on_message(message):
             )
 
             if pola:
-                pola_list = "\n".join([f"• {p} di {attachment.filename}" for p in pola])
+                pola_list = "\n".join([f"• {p}" for p in pola])
                 embed.add_field(name=f"📝 Pola Terdeteksi ({len(pola)})", value=pola_list, inline=False)
-            
+
             if links:
                 links_list = "\n".join([f"🔗 [KLIK LINK WEBHOOK]({l})" for l in links])
                 embed.add_field(name="🌐 Webhook Found", value=links_list, inline=False)
