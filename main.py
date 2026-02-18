@@ -13,7 +13,7 @@ TOKEN = os.getenv("TOKEN")
 SCAN_CHANNEL_ID = 1469740150522380299      
 REQ_VIP_CHANNEL_ID = 1472535677634740398   
 ADMIN_ROLE_ID = 1471265207945924619        
-VIP_ROLE_ID = 1471921766283608195          # ROLE CONTROL BOT
+VIP_ROLE_ID = 1471921766283608195          
 
 # ================= SCANNER ENGINE =================
 def analyze_content(content):
@@ -26,8 +26,10 @@ def analyze_content(content):
     dw_links = re.findall(dw_regex, content)
     tg_links = re.findall(tg_regex, content)
     
-    if dw_links: found_links.extend(dw_links)
-    if tg_links: found_links.extend(tg_links)
+    if dw_links:
+        found_links.extend(dw_links)
+    if tg_links:
+        found_links.extend(tg_links)
         
     danger_map = {
         "os.execute": "os.execute",
@@ -78,14 +80,14 @@ async def menu(interaction: discord.Interaction):
     
     embed.add_field(
         name="🛡️ **SECURITY STATUS**",
-        value=f"**Scanner:** Aktif ✅\n**Channel:** <#1469740150522380299>\n**Format:** .lua, .zip, .7z",
+        value=f"**Scanner:** Aktif ✅\n**Channel:** <#{SCAN_CHANNEL_ID}>\n**Format:** .lua, .zip, .7z",
         inline=False
     )
 
     embed.set_footer(text="Premium Management System • v2.1")
     await interaction.response.send_message(embed=embed)
 
-# ================= ADD VIP (AUTO ROLE) =================
+# ================= ADD VIP =================
 @bot.tree.command(name="addvip", description="Berikan akses VIP kepada user")
 async def addvip(interaction: discord.Interaction, member: discord.Member):
     role_admin = interaction.guild.get_role(ADMIN_ROLE_ID)
@@ -103,20 +105,81 @@ async def addvip(interaction: discord.Interaction, member: discord.Member):
     )
     await interaction.response.send_message(embed=embed)
 
-# ================= SCANNER (ROLE BASED) =================
+# ================= SCANNER =================
 @bot.event
 async def on_message(message):
     if message.author.bot or message.channel.id != SCAN_CHANNEL_ID:
         return
 
     if message.attachments:
-        # 🔥 SEKARANG HANYA CEK ROLE
+
+        # CEK ROLE SAJA
         if VIP_ROLE_ID not in [role.id for role in message.author.roles]:
             embed = discord.Embed(title="🔒 PREMIUM ACCESS REQUIRED", color=0xf1c40f)
             embed.description = f"Halo {message.author.mention}, fitur **Deep Scanner** hanya untuk VIP.\n\n🛡️ **Minta Akses:** <#{REQ_VIP_CHANNEL_ID}>"
             return await message.reply(embed=embed)
 
-        await message.add_reaction("⏳")
-        # (scanner logic tetap sama seperti sebelumnya)
+        for attachment in message.attachments:
+            ext = os.path.splitext(attachment.filename)[1].lower()
+            if ext not in [".lua", ".txt", ".zip", ".7z"]:
+                continue
+
+            await message.add_reaction("⏳")
+            file_data = await attachment.read()
+
+            pola, links = [], []
+            files_count = 0
+
+            try:
+                if ext in [".lua", ".txt"]:
+                    content = file_data.decode(errors="ignore")
+                    p, l = analyze_content(content)
+                    pola.extend(p)
+                    links.extend(l)
+                    files_count = 1
+
+                elif ext == ".zip":
+                    with zipfile.ZipFile(io.BytesIO(file_data)) as z:
+                        for f in z.namelist():
+                            if f.lower().endswith((".lua", ".txt")):
+                                c = z.read(f).decode(errors="ignore")
+                                p, l = analyze_content(c)
+                                pola.extend(p)
+                                links.extend(l)
+                                files_count += 1
+
+                elif ext == ".7z":
+                    with py7zr.SevenZipFile(io.BytesIO(file_data), mode='r') as z:
+                        names = [n for n in z.getnames() if n.lower().endswith((".lua", ".txt"))]
+                        if names:
+                            contents = z.read(names)
+                            for name, bio in contents.items():
+                                c = bio.read().decode(errors="ignore")
+                                p, l = analyze_content(c)
+                                pola.extend(p)
+                                links.extend(l)
+                                files_count += 1
+
+            except Exception as e:
+                await message.remove_reaction("⏳", bot.user)
+                return await message.reply(f"❌ **Read Error:** `{e}`")
+
+            pola = list(set(pola))
+            links = list(set(links))
+
+            if links:
+                status, color = "🔴 🚨 BAHAYA TINGGI", 0xff0000
+            elif len(pola) >= 2:
+                status, color = "🟠 ⚠️ SANGAT MENCURIGAKAN", 0xe67e22
+            elif len(pola) == 1:
+                status, color = "🟡 🤔 MENCURIGAKAN", 0xf1c40f
+            else:
+                status, color = "✅ 🛡️ AMAN", 0x2ecc71
+
+            embed = discord.Embed(title=status, color=color)
+            embed.description = f"**File:** `{attachment.filename}`"
+
+            await message.reply(embed=embed)
+            await message.remove_reaction("⏳", bot.user)
 
 bot.run(TOKEN)
