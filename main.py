@@ -5,20 +5,22 @@ import zipfile
 import py7zr
 import re
 import io
+import aiohttp
 import asyncio
+import random
+import string
 from discord.ext import commands
+from discord import app_commands
 
 # ================= KONFIGURASI ID =================
 TOKEN = os.getenv("TOKEN")
-SCAN_CHANNEL_ID = 1469740150522380299      # Channel khusus Scanner
-CONTROL_ROLE_ID = 1471921766283608195      # Role VIP untuk akses bot
+SCAN_CHANNEL_ID = 1469740150522380299  # Channel khusus Scanner
 
 # ================= UTILITY =================
 def generate_fake_data():
-    # Hanya untuk preview / embed
     nicks = ["Dika_Ganteng", "Admin_SAMP", "Player_Pro", "Tatang_Sakti", "Bocah_SAMP", "Rizky_Gaming"]
-    ips = f"{discord.utils.get(bot.guilds[0].members).id}"  # dummy IP placeholder
-    pw = "password123"  # dummy password
+    ips = f"{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}.{random.randint(1,255)}"
+    pw = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
     return (
         "```ascii\n"
         "╔═══════════════════════════════════════════════╗\n"
@@ -26,13 +28,14 @@ def generate_fake_data():
         "╠═══════════════════════════════════════════════╣\n"
         f"  > Nickname : {random.choice(nicks)}\n"
         f"  > Password : {pw}\n"
-        f"  > IP Addr  : 127.0.0.1\n"
+        f"  > IP Addr  : {ips}\n"
         "╠═══════════════════════════════════════════════╣\n"
         "  SUBSCRIBE : [youtube.com/@tatangchit](https://youtube.com/@tatangchit)           \n"
         "╚═══════════════════════════════════════════════╝\n"
         "```"
     )
 
+# ================= SCANNER ENGINE =================
 def analyze_content(content):
     pola_terdeteksi = []
     found_links = []
@@ -57,71 +60,111 @@ def analyze_content(content):
     return pola_terdeteksi, found_links
 
 # ================= BOT INITIALIZATION =================
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+class TatangBot(commands.Bot):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.message_content = True
+        intents.members = True
+        super().__init__(command_prefix="/", intents=intents)
+    async def setup_hook(self): await self.tree.sync()
 
-# ================= COMMAND =================
-@bot.command(name="menu")
-async def menu_cmd(ctx):
-    if CONTROL_ROLE_ID not in [r.id for r in ctx.author.roles]:
-        return await ctx.send(f"❌ Kamu harus punya role <@&{CONTROL_ROLE_ID}> untuk menggunakan bot.", delete_after=10)
-    
-    embed = discord.Embed(title="📄 TATANG BOT | PREMIUM DASHBOARD", color=0x3498db)
-    embed.description = "Sistem keamanan dan utilitas untuk komunitas SA-MP Indonesia."
-    
+bot = TatangBot()
+
+# ================= SLASH COMMANDS =================
+@bot.tree.command(name="menu", description="Daftar lengkap perintah bot")
+async def menu_cmd(it: discord.Interaction):
+    embed = discord.Embed(
+        title="📄 TATANG BOT | DASHBOARD",
+        color=0x3498db
+    )
+    embed.description = (
+        "Sistem keamanan dan utilitas untuk komunitas SA-MP Indonesia.\n\n"
+        "⚡ Deep Scanner aktif otomatis di channel scanner.\n"
+        "Upload file dan bot akan menganalisis secara otomatis."
+    )
     embed.add_field(
-        name="🛡️ **SECURITY & TOOLS**", 
-        value=f"• Kirim file `.lua`, `.zip`, atau `.7z` di channel khusus scanner untuk analisis otomatis.", 
+        name="🛡️ COMMANDS",
+        value="• /menu\n• /help\n• /status",
         inline=False
     )
-    
     embed.set_footer(text="Official Tatang Bot • youtube.com/@tatangchit")
-    await ctx.send(embed=embed)
+    await it.response.send_message(embed=embed)
+
+@bot.tree.command(name="help", description="Panduan lengkap penggunaan Tatang Bot")
+async def help_cmd(it: discord.Interaction):
+    embed = discord.Embed(
+        title="❓ PANDUAN LENGKAP TATANG BOT",
+        color=0x9b59b6
+    )
+    embed.add_field(
+        name="⚡ CARA PAKAI SCANNER KEYLOGGER",
+        value=(
+            "1️⃣ Masuk ke channel scanner.\n"
+            "2️⃣ Upload file dengan format berikut:\n"
+            "   • .lua\n"
+            "   • .txt\n"
+            "   • .zip\n"
+            "   • .7z\n\n"
+            "3️⃣ Bot otomatis menganalisis file.\n"
+            "4️⃣ Tunggu hingga reaksi ⏳ hilang.\n"
+            "5️⃣ Hasil analisis akan muncul berupa:\n"
+            "   🔴 BAHAYA TINGGI\n"
+            "   🟠 SANGAT MENCURIGAKAN\n"
+            "   ✅ AMAN\n\n"
+            "Scanner mendeteksi:\n"
+            "• Discord Webhook Stealer\n"
+            "• Telegram Bot Stealer\n"
+            "• Pola os.execute / io.popen\n"
+            "• loadstring obfuscation\n"
+            "• Logger SA-MP\n"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="📄 DAFTAR COMMAND",
+        value="• /menu  → Melihat daftar fitur bot\n• /help  → Panduan lengkap penggunaan\n• /status → Cek kesehatan mesin bot",
+        inline=False
+    )
+    embed.set_footer(text="Official Tatang Bot • youtube.com/@tatangchit")
+    await it.response.send_message(embed=embed)
+
+@bot.tree.command(name="status", description="Cek kesehatan bot")
+async def status_cmd(it: discord.Interaction):
+    embed = discord.Embed(title="🚀 SYSTEM STATUS", color=0x2ecc71)
+    embed.add_field(name="RAM Usage", value=f"{psutil.virtual_memory().percent}%", inline=True)
+    embed.add_field(name="Latency", value=f"{round(bot.latency * 1000)}ms", inline=True)
+    embed.set_footer(text="Bot berjalan lancar di server.")
+    await it.response.send_message(embed=embed)
 
 # ================= SCANNER EVENT =================
 @bot.event
 async def on_message(message):
-    await bot.process_commands(message)  # Penting agar command tetap jalan
-    
-    if message.author.bot or message.channel.id != SCAN_CHANNEL_ID: 
-        return
-    
-    if CONTROL_ROLE_ID not in [r.id for r in message.author.roles]:
-        embed = discord.Embed(title="🔒 PREMIUM ACCESS REQUIRED", color=0xf1c40f)
-        embed.description = f"Halo {message.author.mention}, fitur **Deep Scanner** hanya untuk pengguna dengan role VIP.\n\n🛡️ Minta akses dari admin."
-        return await message.reply(embed=embed)
-    
+    if message.author.bot or message.channel.id != SCAN_CHANNEL_ID: return
     if message.attachments:
         for attachment in message.attachments:
-            ext = attachment.filename.lower().split('.')[-1]
-            if ext not in ["lua", "txt", "zip", "7z"]: continue
+            ext = os.path.splitext(attachment.filename)[1].lower()
+            if ext not in [".lua", ".txt", ".zip", ".7z"]: continue
             
             await message.add_reaction("⏳")
             file_data = await attachment.read(); pola, links, files_count = [], [], 0
             
             try:
-                if ext in ["lua", "txt"]:
-                    c = file_data.decode(errors="ignore")
-                    p, l = analyze_content(c)
+                if ext in [".lua", ".txt"]:
+                    c = file_data.decode(errors="ignore"); p, l = analyze_content(c)
                     pola.extend(p); links.extend(l); files_count = 1
-                elif ext == "zip":
+                elif ext == ".zip":
                     with zipfile.ZipFile(io.BytesIO(file_data)) as z:
                         for f in z.namelist():
                             if f.lower().endswith((".lua", ".txt")):
-                                c = z.read(f).decode(errors="ignore"); p, l = analyze_content(c)
-                                pola.extend(p); links.extend(l); files_count += 1
-                elif ext == "7z":
+                                c = z.read(f).decode(errors="ignore"); p, l = analyze_content(c); pola.extend(p); links.extend(l); files_count += 1
+                elif ext == ".7z":
                     with py7zr.SevenZipFile(io.BytesIO(file_data), mode='r') as z:
                         names = [n for n in z.getnames() if n.lower().endswith((".lua", ".txt"))]
                         if names:
                             contents = z.read(names)
                             for name, bio in contents.items():
-                                c = bio.read().decode(errors="ignore"); p, l = analyze_content(c)
-                                pola.extend(p); links.extend(l); files_count += 1
-            except:
-                pass
+                                c = bio.read().decode(errors="ignore"); p, l = analyze_content(c); pola.extend(p); links.extend(l); files_count += 1
+            except: pass
 
             pola, links = list(set(pola)), list(set(links))
             if links:
