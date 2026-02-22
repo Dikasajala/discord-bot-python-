@@ -1,5 +1,10 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, Events } = require('discord.js');
+const {
+  Client,
+  GatewayIntentBits,
+  Events,
+  EmbedBuilder
+} = require('discord.js');
 const axios = require('axios');
 const path = require('path');
 
@@ -28,6 +33,12 @@ client.once(Events.ClientReady, (c) => {
 });
 
 /* =========================
+   GLOBAL ERROR HANDLER
+========================= */
+process.on("unhandledRejection", console.error);
+process.on("uncaughtException", console.error);
+
+/* =========================
    MESSAGE HANDLER
 ========================= */
 client.on(Events.MessageCreate, async (message) => {
@@ -41,31 +52,28 @@ client.on(Events.MessageCreate, async (message) => {
     const hours = Math.floor(uptime / 3600);
     const minutes = Math.floor((uptime % 3600) / 60);
 
-    return message.reply(`
-━━━━━━━━━━━━━━━━━━
-🏓 PONG!
-━━━━━━━━━━━━━━━━━━
+    const embed = new EmbedBuilder()
+      .setColor("Green")
+      .setTitle("🏓 Pong!")
+      .addFields(
+        { name: "Status", value: "Online", inline: true },
+        { name: "Latensi", value: `${client.ws.ping} ms`, inline: true },
+        { name: "Uptime", value: `${hours} jam ${minutes} menit`, inline: false }
+      )
+      .setFooter({ text: "Tatang Bot Security System" })
+      .setTimestamp();
 
-🤖 Status          : Online
-⚡ Latensi         : ${client.ws.ping} ms
-🕒 Uptime          : ${hours} jam ${minutes} menit
-📡 Kondisi Server  : Stabil
-
-━━━━━━━━━━━━━━━━━━
-🟢 Sistem Aktif & Berjalan Normal
-━━━━━━━━━━━━━━━━━━
-`);
+    return message.reply({ embeds: [embed] });
   }
 
 /* =========================
    !MENU
 ========================= */
   if (message.content === "!menu") {
-    return message.reply(`
-━━━━━━━━━━━━━━━━━━━━━━━━
-🤖 TATANG BOT — MENU
-━━━━━━━━━━━━━━━━━━━━━━━━
-
+    const embed = new EmbedBuilder()
+      .setColor("Blue")
+      .setTitle("🤖 TATANG BOT — MENU")
+      .setDescription(`
 🛡️ Scanner aktif di:
 <#${CHANNEL_SCAN}>
 
@@ -80,15 +88,15 @@ client.on(Events.MessageCreate, async (message) => {
 🟢 Aman
 🟡 Mencurigakan
 🔴 Bahaya
+`)
+      .setFooter({ text: "Security Scanner Lua" })
+      .setTimestamp();
 
-━━━━━━━━━━━━━━━━━━━━━━━━
-🔍 Deteksi manual by Tatang Bot
-━━━━━━━━━━━━━━━━━━━━━━━━
-`);
+    return message.reply({ embeds: [embed] });
   }
 
 /* =========================
-   !AI (ONLY AI CHANNEL)
+   !AI (LOCK CHANNEL)
 ========================= */
   if (message.content.toLowerCase().startsWith("!ai")) {
 
@@ -121,7 +129,7 @@ client.on(Events.MessageCreate, async (message) => {
       );
 
       const reply = response.data?.choices?.[0]?.message?.content;
-      if (!reply) return message.reply("⚠️ AI tidak memberikan respon.");
+      if (!reply) return message.reply("⚠️ AI tidak merespon.");
 
       return message.reply(
         reply.length > 2000 ? reply.slice(0, 1990) : reply
@@ -134,7 +142,7 @@ client.on(Events.MessageCreate, async (message) => {
   }
 
 /* =========================
-   FILE SCANNER (SCAN CHANNEL ONLY)
+   FILE SCANNER (EMBED)
 ========================= */
   if (message.channel.id === CHANNEL_SCAN && message.attachments.size > 0) {
 
@@ -142,24 +150,7 @@ client.on(Events.MessageCreate, async (message) => {
     const ext = path.extname(file.name).toLowerCase();
 
     if (!allowedExt.includes(ext)) {
-      return message.reply(`
-━━━━━━━━━━━━━━━━━━
-❌ FORMAT FILE TIDAK DIDUKUNG
-━━━━━━━━━━━━━━━━━━
-
-👤 Pengguna        : ${message.author}
-📄 Status File     : Tidak Valid
-
-📂 Ketentuan:
-• File harus berisi script Lua (.lua / .luac)
-• Maksimal ukuran file 5MB
-
-⚠️ Silakan upload file yang sesuai.
-
-━━━━━━━━━━━━━━━━━━
-💡 Ketik !menu untuk bantuan
-━━━━━━━━━━━━━━━━━━
-`);
+      return message.reply("❌ Format file tidak didukung.");
     }
 
     if (file.size > MAX_SIZE) {
@@ -188,39 +179,36 @@ client.on(Events.MessageCreate, async (message) => {
         found.push("Pola obfuscation terdeteksi");
       }
 
-      let status = "🟢 AMAN";
-      if (risk >= 60) status = "🔴 BAHAYA";
-      else if (risk >= 30) status = "🟡 MENCURIGAKAN";
+      let status = "🟢 Aman";
+      let color = "Green";
 
-      return message.reply(`
-━━━━━━━━━━━━━━━━━━
-🛡️ HASIL PEMINDAIAN FILE
-━━━━━━━━━━━━━━━━━━
+      if (risk >= 60) {
+        status = "🔴 Bahaya";
+        color = "Red";
+      } else if (risk >= 30) {
+        status = "🟡 Mencurigakan";
+        color = "Yellow";
+      }
 
-👤 Pengguna : ${message.author}
+      const embed = new EmbedBuilder()
+        .setColor(color)
+        .setTitle("🛡️ HASIL PEMINDAIAN FILE")
+        .addFields(
+          { name: "Pengguna", value: `${message.author}`, inline: true },
+          { name: "Nama File", value: file.name, inline: true },
+          { name: "Ukuran", value: `${(file.size / 1024 / 1024).toFixed(2)} MB`, inline: true },
+          { name: "Status", value: status, inline: true },
+          { name: "Tingkat Risiko", value: `${risk}%`, inline: true },
+          {
+            name: "Detail Deteksi",
+            value: found.length ? found.map(f => `• ${f}`).join("\n") : "Tidak ada pola mencurigakan"
+          }
+        )
+        .setFooter({ text: "Tatang Bot Security Scanner" })
+        .setTimestamp();
 
-📄 Nama File :
-${file.name}
+      return message.reply({ embeds: [embed] });
 
-📦 Ukuran :
-${(file.size / 1024 / 1024).toFixed(2)} MB
-
-📊 Status :
-${status}
-
-⚠️ Tingkat Risiko :
-${risk}%
-
-🧠 Jumlah Pola Terdeteksi :
-${found.length} pola
-
-🔎 Detail Analisis :
-${found.length ? found.map(f => "• " + f).join("\n") : "Tidak terdeteksi pola mencurigakan"}
-
-━━━━━━━━━━━━━━━━━━
-🔍 Deteksi manual by Tatang Bot
-━━━━━━━━━━━━━━━━━━
-`);
     } catch (err) {
       console.log("SCAN ERROR:", err.message);
       return message.reply("⚠️ Gagal memindai file.");
